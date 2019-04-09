@@ -1,5 +1,3 @@
-// deploy.js
-
 var cmd = require('node-cmd');
 var path, node_ssh, ssh, fs;
 fs = require('fs');
@@ -10,36 +8,22 @@ ssh = new node_ssh();
 // the method that starts the deployment process
 function main() {
   console.log('Deployment started.');
-  cloneRepo();
+  sshConnect();
 }
 
-// responsible for cloning the repo
-function cloneRepo() {
-  console.log('Cloning repo...');
-  // delete old copy of repo. Then, clone a fresh copy of repo from GitHub
-  cmd.get(
-    'rm -rf riot-express-todo-list && git clone https://github.com/bdukellis/riot-express-todo-list.git',
-    function(err, data, stderr) {
-      console.log(
-        'cloneRepo callback\n\t err: ' +
-          err +
-          '\n\t data: ' +
-          data +
-          '\n\t stderr: ' +
-          stderr
-      );
-      if (err == null) {
-        sshConnect();
-      }
-    }
-  );
+// installs PM2
+function installPM2() {
+  return ssh.execCommand(
+    'sudo npm install pm2 -g', {
+      cwd: '/home/ubuntu'
+  });
 }
 
 // transfers local project to the remote server
 function transferProjectToRemote(failed, successful) {
   return ssh.putDirectory(
-    __dirname + '/riot-express-todo-list',
-    '/home/ubuntu/riot-express-todo-list-temp',
+    '../hackathon-starter',
+    '/home/ubuntu/hackathon-starter-temp',
     {
       recursive: true,
       concurrency: 1,
@@ -65,30 +49,32 @@ function transferProjectToRemote(failed, successful) {
 // creates a temporary folder on the remote server
 function createRemoteTempFolder() {
   return ssh.execCommand(
-    'rm -rf riot-express-todo-list-temp && mkdir riot-express-todo-list-temp',
-    { cwd: '/home/ubuntu' }
-  );
+    'rm -rf hackathon-starter-temp && mkdir hackathon-starter-temp', {
+      cwd: '/home/ubuntu'
+  });
 }
 
 // stops mongodb and node services on the remote server
 function stopRemoteServices() {
-  return ssh.execCommand('npm stop && sudo service mongod stop', {
-    cwd: '/home/ubuntu'
+  return ssh.execCommand(
+    'pm2 stop all && sudo service mongod stop', {
+      cwd: '/home/ubuntu'
   });
 }
 
-// updates the project on the server
+// updates the project source on the server
 function updateRemoteApp() {
   return ssh.execCommand(
-    'cp -r riot-express-todo-list-temp/* riot-express-todo-list/ && rm -rf riot-express-todo-list-temp/*',
-    { cwd: '/home/ubuntu' }
-  );
+    'cp -r hackathon-starter-temp/* hackathon-starter/ && rm -rf hackathon-starter-temp', {
+      cwd: '/home/ubuntu'
+  });
 }
 
 // restart mongodb and node services on the remote server
 function restartRemoteServices() {
-  return ssh.execCommand('npm start && sudo service mongod start', {
-    cwd: '/home/ubuntu'
+  return ssh.execCommand(
+    'cd hackathon-starter && sudo service mongod start && pm2 start app.js', {
+      cwd: '/home/ubuntu'
   });
 }
 
@@ -99,16 +85,17 @@ function sshConnect() {
   ssh
     .connect({
       // TODO: ADD YOUR IP ADDRESS BELOW (e.g. '12.34.5.67')
-      host: '18.188.153.217',
+      host: '18.191.145.156',
       username: 'ubuntu',
-      privateKey: 'hs-key.pem'
+      privateKey: 'todo-key.ppk'
     })
     .then(function() {
       console.log('SSH Connection established.');
-
-      // Create "riot-express-todo-list-temp" directory on remote server
-      console.log('Creating `riot-express-todo-list-temp` folder.');
-
+      console.log('Installing PM2...');
+      return installPM2();
+    })
+    .then(function() {
+      console.log('Creating `hackathon-starter-temp` folder.');
       return createRemoteTempFolder();
     })
     .then(function(result) {
@@ -121,10 +108,12 @@ function sshConnect() {
         console.log('STDERR: ' + result.stderr);
         return Promise.reject(result.stderr);
       }
+      console.log('Transferring files to remote server...');
       return transferProjectToRemote(failed, successful);
     })
     .then(function(status) {
       if (status) {
+        console.log('Stopping remote services.');
         return stopRemoteServices();
       } else {
         return Promise.reject(failed.join(', '));
@@ -132,6 +121,7 @@ function sshConnect() {
     })
     .then(function(status) {
       if (status) {
+        console.log('Updating remote app.');
         return updateRemoteApp();
       } else {
         return Promise.reject(failed.join(', '));
@@ -139,13 +129,14 @@ function sshConnect() {
     })
     .then(function(status) {
       if (status) {
+        console.log('Restarting remote services...');
         return restartRemoteServices();
       } else {
         return Promise.reject(failed.join(', '));
       }
     })
     .then(function() {
-      console.log('Deployment complete.');
+      console.log('DEPLOYMENT COMPLETE!');
       process.exit(0);
     })
     .catch(e => {
